@@ -1,0 +1,17 @@
+{
+  "name": "quilt-backup",
+  "module": "src/index.ts",
+  "type": "module",
+  "devDependencies": {
+    "@types/archiver": "^6.0.2",
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "dotenv": "^16.4.5",
+    "googleapis": "^144.0.0"
+  }
+}
