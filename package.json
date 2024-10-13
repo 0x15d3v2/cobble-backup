@@ -10,8 +10,8 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
+    "@googleapis/oauth2": "^1.0.7",
     "archiver": "^7.0.1",
-    "dotenv": "^16.4.5",
     "googleapis": "^144.0.0"
   }
 }

@@ -1,114 +1,56 @@
+import { createServer } from 'http';
 import { google } from 'googleapis';
-import fs from 'fs';
-import path from 'path';
-import archiver from 'archiver';
-import { config } from 'dotenv';
+import BackupManager from './backupmanager';
 
-config();
+const CLIENT_ID = Bun.env.CLIENT_ID;
+const CLIENT_SECRET = Bun.env.CLIENT_SECRET;
+const BACKUP_FILE = Bun.env.BACKUP_FILE;
 
-const oAuth2Client = new google.auth.OAuth2(
-  process.env.CLIENT_ID,
-  process.env.CLIENT_SECRET,
-  process.env.REDIRECT_URI
-);
-
-async function getUserInfo(drive: any) {
-  try {
-    const res = await drive.about.get({
-      fields: 'user',
-    });
-    const user = res.data.user;
-    console.log(`Bağlandığınız kullanıcı: ${user.displayName} (${user.emailAddress})`);
-  } catch (error) {
-    console.error('Kullanıcı bilgileri alınırken hata:', error);
-  }
+if (!CLIENT_ID || !CLIENT_SECRET || !BACKUP_FILE) {
+  console.log("Missing environment variables. Please check your .env file.");
+  process.exit(1);
 }
 
-const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
-const TOKEN_PATH = process.env.TOKEN_PATH || 'token.json';
-async function getAccessToken() {
-  const authUrl = oAuth2Client.generateAuthUrl({
-    access_type: 'offline',
-    scope: SCOPES,
-  });
-  console.log('Bu linke girdiğinizde çıkan yerden hesabınıza giriş yapıp http://localhost/?code=4/0AVG7fiRCgjj ile başlayıp &scope=https://www.googleapis.com/auth/drive.file ile biten kısım sizin AUTHORIZATION_CODE niz.:', authUrl);
+const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, "http://localhost:3000/callback");
+const authUrl = oauth2Client.generateAuthUrl({
+  access_type: 'offline',
+  scope: ['https://www.googleapis.com/auth/drive.file'],
+});
 
-  const authorizationCode = process.env.AUTHORIZATION_CODE;
+const server = createServer(async (req, res) => {
+  if (req.url?.startsWith('/callback')) {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const code = url.searchParams.get('code') as string;
 
-  if (!authorizationCode) {
-    throw new Error('Lütfen yönlendirildiğiniz sitedeki http://localhost/?code= ile başlayıp &scope=https://www.googleapis.com/auth/drive.file ile biten 4/0AVG7fiRCgjj kısmını .env configinize koyun.');
-  }
+    if (code) {
+      try {
+        const { tokens } = await oauth2Client.getToken(code);
+        oauth2Client.setCredentials(tokens);
 
-  const tokenResponse = await oAuth2Client.getToken(authorizationCode);
+        const REFRESH_TOKEN = tokens.refresh_token;
+        console.log('Refresh Token:', REFRESH_TOKEN);
+        if(!REFRESH_TOKEN) return;
+        const backupManager = new BackupManager(CLIENT_ID, CLIENT_SECRET, "http://localhost:3000/callback", REFRESH_TOKEN);
+        await backupManager.backupFileToGoogleDrive(BACKUP_FILE);
 
-  if (tokenResponse.tokens) {
-    oAuth2Client.setCredentials(tokenResponse.tokens);
-    fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokenResponse.tokens));
-    console.log('Tokenler belirlediğiniz jsona eklendi: ', TOKEN_PATH);
-  } else {
-    throw new Error('Tokenleri alırken bir hata meydana geldi.');
-  }
-}
-
-async function backupMinecraftServer() {
-  const backupPath = process.env.BACKUP_PATH;
-  const backupFileName = `cobble_backup.zip`;
-  if (!backupPath) return;
-  const zipFilePath = path.join(backupPath, backupFileName);
-
-  const output = fs.createWriteStream(zipFilePath);
-  const archive = archiver('zip');
-
-  output.on('close', async () => {
-    console.log(`${archive.pointer()} byte`);
-    console.log('Zip dosyası başarıyla oluşturuldu.');
-
-    const drive = google.drive({ version: 'v3', auth: oAuth2Client });
-
-    await getUserInfo(drive);
-
-    const fileMetadata = {
-      name: backupFileName,
-    };
-    const media = {
-      mimeType: 'application/zip',
-      body: fs.createReadStream(zipFilePath),
-    };
-
-    try {
-      const res = await drive.files.create({
-        requestBody: fileMetadata,
-        media: media,
-        fields: 'id',
-      });
-
-      if (res && res.data) {
-        console.log('Dosya ID:', res.data.id);
-      } else {
-        console.error('Bir hata meydana geldi');
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('Backup completed successfully! You can close this window.');
+      } catch (error) {
+        console.error('Error retrieving access token', error);
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('Error retrieving access token.');
       }
-    } catch (error) {
-      console.error('Dosyayı yüklerken bir hata ile karşılaşıldı:', error);
+    } else {
+      res.writeHead(400, { 'Content-Type': 'text/plain' });
+      res.end('Authorization code missing.');
     }
-  });
-
-  archive.on('error', (err) => {
-    throw err;
-  });
-
-  archive.pipe(output);
-  archive.directory(path.join(backupPath, 'world'), 'world');
-  archive.directory(path.join(backupPath, 'world_nether'), 'world_nether');
-  archive.directory(path.join(backupPath, 'world_the_end'), 'world_the_end');
-  await archive.finalize();
-}
-
-(async () => {
-  if (fs.existsSync(TOKEN_PATH)) {
-    const token = JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf-8'));
-    oAuth2Client.setCredentials(token);
-    await backupMinecraftServer().catch(console.error);
   } else {
-    await getAccessToken();
+    res.writeHead(302, { Location: authUrl });
+    res.end();
   }
-})();
+});
+
+const PORT = 3000;
+server.listen(PORT, () => {
+  console.log(`Open the http://localhost:${PORT} url.`);
+});
